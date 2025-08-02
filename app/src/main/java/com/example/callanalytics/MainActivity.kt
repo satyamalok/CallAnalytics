@@ -12,11 +12,13 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.example.callanalytics.fragments.DashboardFragment
 import com.example.callanalytics.fragments.CallLogFragment
 import com.example.callanalytics.fragments.SettingsFragment
+import com.example.callanalytics.utils.WebSocketManager
 
 class MainActivity : AppCompatActivity() {
 
     private val PERMISSION_REQUEST_CODE = 1001
     private lateinit var bottomNavigation: BottomNavigationView
+    private lateinit var webSocketManager: WebSocketManager
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
@@ -33,10 +35,31 @@ class MainActivity : AppCompatActivity() {
         setupBottomNavigation()
         checkAndRequestPermissions()
 
+        // Initialize WebSocket Manager
+        webSocketManager = WebSocketManager.getInstance(this)
+
         // Load default fragment
         if (savedInstanceState == null) {
             loadFragment(DashboardFragment())
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Connect WebSocket when app comes to foreground
+        webSocketManager.connect()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Keep WebSocket connected in background for call monitoring
+        // Only disconnect on app destroy
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Disconnect WebSocket when app is destroyed
+        webSocketManager.disconnect()
     }
 
     private fun setupBottomNavigation() {
