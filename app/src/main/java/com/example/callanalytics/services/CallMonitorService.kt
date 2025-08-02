@@ -31,6 +31,8 @@ class CallMonitorService : Service() {
     private lateinit var webhookManager: WebhookManager
     private var serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
+    private var isProcessingCall = false
+    private var lastProcessedCallTime = 0L
 
     // Call tracking variables
     private var callStartTime = 0L
@@ -93,15 +95,26 @@ class CallMonitorService : Service() {
     }
 
     private fun handleIdleState() {
-        if (isCallActive) {
+        if (isCallActive && !isProcessingCall) {
             val callEndTime = System.currentTimeMillis()
+
+            // Prevent duplicate processing
+            if (callEndTime - lastProcessedCallTime < 2000) {
+                Log.d(TAG, "🔄 Skipping duplicate call end processing")
+                return
+            }
+
+            isProcessingCall = true
+            lastProcessedCallTime = callEndTime
+
             Log.d(TAG, "📴 Call ended at ${Date(callEndTime)}")
 
             // Wait a bit for call log to update, then process
             serviceScope.launch {
-                delay(2000) // Wait 2 seconds for call log to update
+                delay(3000) // Increased to 3 seconds
                 processLastCall(callEndTime)
                 resetCallTracking()
+                isProcessingCall = false
             }
         }
     }
@@ -112,17 +125,36 @@ class CallMonitorService : Service() {
             if (lastCall != null) {
                 Log.d(TAG, "📋 Processing call: ${lastCall.phoneNumber}")
 
-                // Calculate durations
-                val totalDuration = if (callStartTime > 0) (callEndTime - callStartTime) / 1000 else lastCall.totalDuration
-                val talkDuration = if (callAnswerTime > 0 && lastCall.callType != "missed") {
-                    (callEndTime - callAnswerTime) / 1000
+                // Calculate ACTUAL durations
+                val calculatedTotalDuration = if (callStartTime > 0) {
+                    (callEndTime - callStartTime) / 1000
                 } else {
-                    lastCall.talkDuration
+                    lastCall.totalDuration // fallback to call log duration
                 }
 
+                val calculatedTalkDuration = if (callAnswerTime > 0) {
+                    // Use the smaller of: our calculation vs call log duration
+                    val ourCalculation = (callEndTime - callAnswerTime) / 1000
+                    val callLogDuration = lastCall.talkDuration
+
+                    // Call log is more accurate for talk time, use it if available
+                    if (callLogDuration > 0) callLogDuration else ourCalculation
+                } else {
+                    // No answer time recorded, probably missed call
+                    0L
+                }
+
+                Log.d(TAG, "⏱️ Duration Calculation:")
+                Log.d(TAG, "   Call Start: ${if (callStartTime > 0) Date(callStartTime) else "Not recorded"}")
+                Log.d(TAG, "   Call Answer: ${if (callAnswerTime > 0) Date(callAnswerTime) else "Not answered"}")
+                Log.d(TAG, "   Call End: ${Date(callEndTime)}")
+                Log.d(TAG, "   Total Duration: ${calculatedTotalDuration}s")
+                Log.d(TAG, "   Talk Duration: ${calculatedTalkDuration}s")
+                Log.d(TAG, "   CallLog Duration: ${lastCall.talkDuration}s")
+
                 val finalCallData = lastCall.copy(
-                    totalDuration = totalDuration,
-                    talkDuration = talkDuration
+                    totalDuration = calculatedTotalDuration,
+                    talkDuration = calculatedTalkDuration
                 )
 
                 // Save to database
