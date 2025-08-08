@@ -8,6 +8,7 @@ import android.database.Cursor
 import android.os.Build
 import android.os.IBinder
 import android.provider.CallLog
+import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -33,7 +34,9 @@ class CallMonitorService : Service() {
     private var isCallActive = false
     private var callStartTime = 0L
     private var callAnswerTime = 0L
-    private var lastProcessedCall: CallData? = null
+    private var currentCallNumber: String? = null
+    private var currentCallType: String? = null
+    private var lastProcessedCallTimestamp = 0L  // NEW: Prevent duplicate processing
 
     companion object {
         private const val TAG = "CallMonitorService"
@@ -73,31 +76,36 @@ class CallMonitorService : Service() {
         if (!isCallActive) {
             callStartTime = System.currentTimeMillis()
             isCallActive = true
-            Log.d(TAG, "📲 Call started (RINGING): $phoneNumber at ${Date(callStartTime)}")
+            currentCallNumber = phoneNumber
+            currentCallType = "incoming"
+            Log.d(TAG, "📲 Incoming call started: $phoneNumber at ${Date(callStartTime)}")
 
-            // Send WebSocket event for incoming call
-            if (phoneNumber != null) {
-                webSocketManager.sendCallStarted(phoneNumber, "incoming")
-            }
+            // Don't send WebSocket here, wait for answer
         }
     }
 
     private fun handleOffhookState(phoneNumber: String?) {
-        if (isCallActive && callAnswerTime == 0L) {
+        if (isCallActive && callAnswerTime == 0L && currentCallType == "incoming") {
             // Incoming call answered
             callAnswerTime = System.currentTimeMillis()
             Log.d(TAG, "📞 Incoming call answered at ${Date(callAnswerTime)}")
+
+            // Send WebSocket for incoming call when answered
+            if (currentCallNumber != null) {
+                webSocketManager.sendCallStarted(currentCallNumber!!, "incoming")
+            }
 
         } else if (!isCallActive) {
             // Outgoing call started
             callStartTime = System.currentTimeMillis()
             callAnswerTime = System.currentTimeMillis()
             isCallActive = true
+            currentCallNumber = phoneNumber ?: "Unknown"
+            currentCallType = "outgoing"
             Log.d(TAG, "📞 Outgoing call started at ${Date(callStartTime)}")
 
-            // Send WebSocket event for outgoing call
-            val number = phoneNumber ?: "Unknown"
-            webSocketManager.sendCallStarted(number, "outgoing")
+            // Send WebSocket for outgoing call
+            webSocketManager.sendCallStarted(currentCallNumber!!, "outgoing")
         }
     }
 
@@ -108,7 +116,7 @@ class CallMonitorService : Service() {
 
             // Wait a bit for call log to update, then process
             serviceScope.launch {
-                delay(2000)
+                delay(3000)  // Increased delay to ensure call log is updated
                 processLastCall(callEndTime)
                 resetCallTracking()
             }
@@ -119,43 +127,52 @@ class CallMonitorService : Service() {
         try {
             val lastCall = getLastCallFromLog()
             if (lastCall != null) {
+
+                // DUPLICATE PREVENTION: Check if we already processed this call
+                if (lastCall.timestamp <= lastProcessedCallTimestamp) {
+                    Log.d(TAG, "⚠️ Call already processed, skipping duplicate")
+                    return
+                }
+
                 Log.d(TAG, "📋 Processing call: ${lastCall.phoneNumber}")
 
                 // Calculate ACTUAL durations
                 val calculatedTotalDuration = if (callStartTime > 0) {
                     (callEndTime - callStartTime) / 1000
                 } else {
-                    lastCall.totalDuration // fallback to call log duration
+                    lastCall.totalDuration
                 }
 
-                val calculatedTalkDuration = if (callAnswerTime > 0) {
-                    // Use the smaller of: our calculation vs call log duration
+                val calculatedTalkDuration = if (callAnswerTime > 0 && currentCallType == "incoming") {
+                    // For incoming calls, use our calculation
                     val ourCalculation = (callEndTime - callAnswerTime) / 1000
                     val callLogDuration = lastCall.talkDuration
-
-                    // Call log is more accurate for talk time, use it if available
                     if (callLogDuration > 0) callLogDuration else ourCalculation
                 } else {
-                    // No answer time recorded, probably missed call
-                    0L
+                    // For outgoing calls, use call log duration
+                    lastCall.talkDuration
                 }
 
                 Log.d(TAG, "⏱️ Duration Calculation:")
+                Log.d(TAG, "   Call Type: $currentCallType")
                 Log.d(TAG, "   Call Start: ${if (callStartTime > 0) Date(callStartTime) else "Not recorded"}")
                 Log.d(TAG, "   Call Answer: ${if (callAnswerTime > 0) Date(callAnswerTime) else "Not answered"}")
                 Log.d(TAG, "   Call End: ${Date(callEndTime)}")
                 Log.d(TAG, "   Total Duration: ${calculatedTotalDuration}s")
                 Log.d(TAG, "   Talk Duration: ${calculatedTalkDuration}s")
-                Log.d(TAG, "   CallLog Duration: ${lastCall.talkDuration}s")
 
                 val finalCallData = lastCall.copy(
                     totalDuration = calculatedTotalDuration,
-                    talkDuration = calculatedTalkDuration
+                    talkDuration = calculatedTalkDuration,
+                    contactName = getContactName(lastCall.phoneNumber)  // Add contact lookup
                 )
 
                 // Save to database
                 val callId = database.callDao().insertCall(finalCallData)
                 Log.d(TAG, "💾 Call saved with ID: $callId")
+
+                // Update last processed timestamp to prevent duplicates
+                lastProcessedCallTimestamp = lastCall.timestamp
 
                 // Send webhook (EXISTING FUNCTIONALITY - PRESERVED)
                 webhookManager.sendWebhook(finalCallData.copy(id = callId))
@@ -183,13 +200,12 @@ class CallMonitorService : Service() {
                     CallLog.Calls.DATE
                 )
 
-                // Fix: Remove LIMIT from the sortOrder parameter
                 val cursor: Cursor? = contentResolver.query(
                     CallLog.Calls.CONTENT_URI,
                     projection,
                     null,
                     null,
-                    "${CallLog.Calls.DATE} DESC" // Removed "LIMIT 1" from here
+                    "${CallLog.Calls.DATE} DESC"
                 )
 
                 cursor?.use {
@@ -223,7 +239,7 @@ class CallMonitorService : Service() {
 
                         return@withContext CallData(
                             phoneNumber = phoneNumber,
-                            contactName = getContactName(phoneNumber),
+                            contactName = null, // Will be filled by getContactName
                             callType = callType,
                             talkDuration = duration,
                             totalDuration = duration,
@@ -245,8 +261,62 @@ class CallMonitorService : Service() {
     }
 
     private fun getContactName(phoneNumber: String): String? {
-        // Simple contact lookup - you can expand this
-        return null
+        return try {
+            // Check if we have permission
+            if (checkSelfPermission(android.Manifest.permission.READ_CONTACTS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.w(TAG, "📱 No READ_CONTACTS permission")
+                return null
+            }
+
+            // Clean the phone number for better matching
+            val cleanNumber = phoneNumber.replace("[^\\d+]".toRegex(), "")
+            Log.d(TAG, "📱 Looking up contact for: $phoneNumber (cleaned: $cleanNumber)")
+
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
+
+            // Try multiple query variations for better matching
+            val queries = listOf(
+                phoneNumber,
+                cleanNumber,
+                if (cleanNumber.startsWith("+91")) cleanNumber.substring(3) else cleanNumber,
+                if (cleanNumber.length == 10) "+91$cleanNumber" else cleanNumber
+            )
+
+            for (queryNumber in queries) {
+                val cursor = contentResolver.query(
+                    uri,
+                    projection,
+                    "${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?",
+                    arrayOf("%$queryNumber%"),
+                    null
+                )
+
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                        val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+
+                        if (nameIndex >= 0) {
+                            val contactName = it.getString(nameIndex)
+                            val contactNumber = if (numberIndex >= 0) it.getString(numberIndex) else "unknown"
+                            Log.d(TAG, "📱 Contact found: $contactName ($contactNumber) for query: $queryNumber")
+                            return contactName
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "📱 No contact found for: $phoneNumber")
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error looking up contact: ${e.message}")
+            null
+        }
     }
 
     private fun resetCallTracking() {
@@ -254,7 +324,8 @@ class CallMonitorService : Service() {
         isCallActive = false
         callStartTime = 0
         callAnswerTime = 0
-        lastProcessedCall = null
+        currentCallNumber = null
+        currentCallType = null
     }
 
     private fun startForegroundService() {

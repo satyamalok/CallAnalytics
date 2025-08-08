@@ -13,6 +13,8 @@ import com.example.callanalytics.fragments.DashboardFragment
 import com.example.callanalytics.fragments.CallLogFragment
 import com.example.callanalytics.fragments.SettingsFragment
 import com.example.callanalytics.utils.WebSocketManager
+import android.provider.ContactsContract  // ADD THIS LINE
+import android.util.Log                   // ADD THIS LINE
 
 class MainActivity : AppCompatActivity() {
 
@@ -34,6 +36,8 @@ class MainActivity : AppCompatActivity() {
 
         setupBottomNavigation()
         checkAndRequestPermissions()
+
+        checkContactsPermission()
 
         // Initialize WebSocket Manager
         webSocketManager = WebSocketManager.getInstance(this)
@@ -99,6 +103,33 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
         } else {
             Toast.makeText(this, "✅ All permissions granted! Call monitoring active.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun checkContactsPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+            == PackageManager.PERMISSION_GRANTED) {
+            // Test contact lookup
+            testContactLookup()
+        } else {
+            Toast.makeText(this, "⚠️ Contacts permission needed for contact names", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun testContactLookup() {
+        try {
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val cursor = contentResolver.query(uri, projection, null, null, null)
+
+            val contactCount = cursor?.count ?: 0
+            cursor?.close()
+
+            Log.d("MainActivity", "📱 Contact access test: $contactCount contacts found")
+            Toast.makeText(this, "📱 Contact access: $contactCount contacts found", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "❌ Contact access failed: ${e.message}")
+            Toast.makeText(this, "❌ Contact access failed", Toast.LENGTH_SHORT).show()
         }
     }
 
