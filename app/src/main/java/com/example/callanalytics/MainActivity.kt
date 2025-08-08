@@ -36,6 +36,20 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.POST_NOTIFICATIONS
     )
 
+    private fun checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "⚠️ Overlay permission needed for reminders", Toast.LENGTH_LONG).show()
+
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            } else {
+                Log.d("MainActivity", "✅ Overlay permission granted")
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -44,6 +58,7 @@ class MainActivity : AppCompatActivity() {
 
         setupBottomNavigation()
         checkAndRequestPermissions()
+        checkOverlayPermission()
 
         // Initialize WebSocket Manager
         webSocketManager = WebSocketManager.getInstance(this)

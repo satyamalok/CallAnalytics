@@ -1,6 +1,7 @@
 package com.example.callanalytics.utils
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
 import io.socket.client.IO
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import com.example.callanalytics.services.OverlayService
 import java.net.URISyntaxException
 
 class WebSocketManager(private val context: Context) {
@@ -23,12 +25,7 @@ class WebSocketManager(private val context: Context) {
 
     companion object {
         private const val TAG = "WebSocketManager"
-
         private const val SERVER_URL = "https://analytics.tsblive.in"
-
-        // private const val SERVER_URL = "https://analytics.tsblive.in" // Your production URL
-        // For testing with local server, use: "http://10.0.2.2:3000" (for emulator)
-       // For testing with local server on device, use: "http://YOUR_LOCAL_IP:3000"
 
         @Volatile
         private var INSTANCE: WebSocketManager? = null
@@ -115,6 +112,69 @@ class WebSocketManager(private val context: Context) {
             on("pong") {
                 Log.d(TAG, "🏓 Pong received")
             }
+
+            // NEW: Reminder trigger handler
+            on("reminder_trigger") { args ->
+                if (args.isNotEmpty()) {
+                    try {
+                        val data = args[0] as JSONObject
+                        val action = data.getString("action")
+                        val message = data.getString("message")
+                        val idleTime = data.getString("idleTime")
+                        val agentCode = data.getString("agentCode")
+
+                        Log.d(TAG, "📱 Reminder trigger received: $message")
+
+                        if (action == "show_reminder") {
+                            // Show overlay notification
+                            showOverlayNotification(message, idleTime)
+
+                            // Send acknowledgment back to server
+                            sendReminderAcknowledgment(agentCode)
+                        }
+
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error processing reminder trigger: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showOverlayNotification(message: String, idleTime: String) {
+        try {
+            val intent = Intent(context, OverlayService::class.java).apply {
+                action = OverlayService.ACTION_SHOW_OVERLAY
+                putExtra(OverlayService.EXTRA_MESSAGE, message)
+                putExtra(OverlayService.EXTRA_IDLE_TIME, idleTime)
+            }
+
+            context.startService(intent)
+            Log.d(TAG, "📱 Overlay notification triggered: $message")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error showing overlay notification: ${e.message}")
+        }
+    }
+
+    private fun sendReminderAcknowledgment(agentCode: String) {
+        if (!isConnected) {
+            Log.w(TAG, "⚠️ Not connected, cannot send reminder acknowledgment")
+            return
+        }
+
+        try {
+            val data = JSONObject().apply {
+                put("action", "reminder_acknowledged")
+                put("agentCode", agentCode)
+                put("timestamp", System.currentTimeMillis())
+            }
+
+            socket?.emit("reminder_acknowledged", data)
+            Log.d(TAG, "✅ Reminder acknowledgment sent for $agentCode")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending reminder acknowledgment: ${e.message}")
         }
     }
 
