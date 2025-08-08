@@ -80,20 +80,18 @@ class CallMonitorService : Service() {
             currentCallType = "incoming"
             Log.d(TAG, "📲 Incoming call started: $phoneNumber at ${Date(callStartTime)}")
 
-            // Don't send WebSocket here, wait for answer
+            // NEW: Send WebSocket immediately for incoming calls (ringing state)
+            if (currentCallNumber != null) {
+                webSocketManager.sendCallStarted(currentCallNumber!!, "incoming")
+            }
         }
     }
 
     private fun handleOffhookState(phoneNumber: String?) {
         if (isCallActive && callAnswerTime == 0L && currentCallType == "incoming") {
-            // Incoming call answered
+            // Incoming call answered - just record answer time, don't send WebSocket again
             callAnswerTime = System.currentTimeMillis()
             Log.d(TAG, "📞 Incoming call answered at ${Date(callAnswerTime)}")
-
-            // Send WebSocket for incoming call when answered
-            if (currentCallNumber != null) {
-                webSocketManager.sendCallStarted(currentCallNumber!!, "incoming")
-            }
 
         } else if (!isCallActive) {
             // Outgoing call started
