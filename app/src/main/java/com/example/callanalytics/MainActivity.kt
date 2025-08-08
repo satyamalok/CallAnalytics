@@ -1,8 +1,16 @@
 package com.example.callanalytics
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.ContactsContract
+import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -13,8 +21,6 @@ import com.example.callanalytics.fragments.DashboardFragment
 import com.example.callanalytics.fragments.CallLogFragment
 import com.example.callanalytics.fragments.SettingsFragment
 import com.example.callanalytics.utils.WebSocketManager
-import android.provider.ContactsContract  // ADD THIS LINE
-import android.util.Log                   // ADD THIS LINE
 
 class MainActivity : AppCompatActivity() {
 
@@ -34,10 +40,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        Log.d("MainActivity", "🚀 MainActivity onCreate started")
+
         setupBottomNavigation()
         checkAndRequestPermissions()
-
-        checkContactsPermission()
 
         // Initialize WebSocket Manager
         webSocketManager = WebSocketManager.getInstance(this)
@@ -46,24 +52,34 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             loadFragment(DashboardFragment())
         }
+
+        Log.d("MainActivity", "✅ MainActivity onCreate completed")
     }
 
     override fun onResume() {
         super.onResume()
+        Log.d("MainActivity", "📱 MainActivity onResume")
+
         // Connect WebSocket when app comes to foreground
         webSocketManager.connect()
+
+        // Check contacts permission after all other permissions are granted
+        checkContactsPermission()
+
+        // Request battery optimization disable (non-blocking)
+        requestBatteryOptimizationDisable()
     }
 
     override fun onPause() {
         super.onPause()
+        Log.d("MainActivity", "📱 MainActivity onPause")
         // Keep WebSocket connected in background for call monitoring
-        // Only disconnect on app destroy
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Disconnect WebSocket when app is destroyed
-        webSocketManager.disconnect()
+        Log.d("MainActivity", "📱 MainActivity onDestroy")
+        // Don't disconnect WebSocket here - let it run in background
     }
 
     private fun setupBottomNavigation() {
@@ -130,6 +146,22 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e("MainActivity", "❌ Contact access failed: ${e.message}")
             Toast.makeText(this, "❌ Contact access failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun requestBatteryOptimizationDisable() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+
+                if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    intent.data = Uri.parse("package:$packageName")
+                    startActivity(intent)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "❌ Battery optimization request failed: ${e.message}")
         }
     }
 
