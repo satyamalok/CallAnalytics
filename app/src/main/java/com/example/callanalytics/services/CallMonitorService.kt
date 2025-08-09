@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.CallLog
 import android.provider.ContactsContract
+import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -30,13 +31,18 @@ class CallMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
 
-    // Call tracking variables
-    private var isCallActive = false
+    // 🎯 NEW: State tracking variables for reliable call detection
+    private var lastCallState = TelephonyManager.CALL_STATE_IDLE
+    private var wasRinging = false
+    private var webSocketSent = false
+    private var lastProcessedCallTimestamp = 0L
+
+    // 🎯 NEW: Simplified call tracking variables
     private var callStartTime = 0L
     private var callAnswerTime = 0L
     private var currentCallNumber: String? = null
     private var currentCallType: String? = null
-    private var lastProcessedCallTimestamp = 0L  // NEW: Prevent duplicate processing
+    private var isCallActive = false
 
     companion object {
         private const val TAG = "CallMonitorService"
@@ -52,7 +58,7 @@ class CallMonitorService : Service() {
         webSocketManager = WebSocketManager.getInstance(this)
 
         createNotificationChannel()
-        Log.d(TAG, "🚀 CallMonitorService created")
+        Log.d(TAG, "🚀 CallMonitorService created with state tracking")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -63,64 +69,139 @@ class CallMonitorService : Service() {
 
         Log.d(TAG, "📱 Service command: State=$phoneState, Number=$phoneNumber")
 
-        when (phoneState) {
-            "RINGING" -> handleRingingState(phoneNumber)
-            "OFFHOOK" -> handleOffhookState(phoneNumber)
-            "IDLE" -> handleIdleState()
+        // 🎯 NEW: Convert phone state string to integer for state machine
+        val callState = when (phoneState) {
+            "RINGING" -> TelephonyManager.CALL_STATE_RINGING
+            "OFFHOOK" -> TelephonyManager.CALL_STATE_OFFHOOK
+            "IDLE" -> TelephonyManager.CALL_STATE_IDLE
+            else -> -1
+        }
+
+        if (callState != -1) {
+            handleCallStateChange(callState, phoneNumber)
         }
 
         return START_STICKY
     }
 
-    private fun handleRingingState(phoneNumber: String?) {
-        if (!isCallActive) {
-            callStartTime = System.currentTimeMillis()
-            isCallActive = true
-            currentCallNumber = phoneNumber
-            currentCallType = "incoming"
-            Log.d(TAG, "📲 Incoming call started: $phoneNumber at ${Date(callStartTime)}")
+    // 🎯 NEW: Main state machine method - handles all call state changes
+    private fun handleCallStateChange(newState: Int, phoneNumber: String?) {
+        Log.d(TAG, "📊 State change: ${getStateName(lastCallState)} → ${getStateName(newState)}")
+        Log.d(TAG, "📊 Tracking: wasRinging=$wasRinging, webSocketSent=$webSocketSent, isCallActive=$isCallActive")
 
-            // NEW: Send WebSocket immediately for incoming calls (ringing state)
-            if (currentCallNumber != null) {
-                webSocketManager.sendCallStarted(currentCallNumber!!, "incoming")
+        when (newState) {
+            TelephonyManager.CALL_STATE_RINGING -> {
+                handleRingingState(phoneNumber)
+            }
+
+            TelephonyManager.CALL_STATE_OFFHOOK -> {
+                handleOffhookState(phoneNumber)
+            }
+
+            TelephonyManager.CALL_STATE_IDLE -> {
+                handleIdleState()
             }
         }
+
+        // Update last state for next transition
+        lastCallState = newState
     }
 
-    private fun handleOffhookState(phoneNumber: String?) {
-        if (isCallActive && callAnswerTime == 0L && currentCallType == "incoming") {
-            // Incoming call answered - just record answer time, don't send WebSocket again
-            callAnswerTime = System.currentTimeMillis()
-            Log.d(TAG, "📞 Incoming call answered at ${Date(callAnswerTime)}")
-
-        } else if (!isCallActive) {
-            // Outgoing call started
-            callStartTime = System.currentTimeMillis()
-            callAnswerTime = System.currentTimeMillis()
+    // 🎯 NEW: Incoming call ringing - prepare but don't send WebSocket yet
+    private fun handleRingingState(phoneNumber: String?) {
+        if (!isCallActive) {
+            wasRinging = true
+            webSocketSent = false
             isCallActive = true
-            currentCallNumber = phoneNumber ?: "Unknown"
-            currentCallType = "outgoing"
-            Log.d(TAG, "📞 Outgoing call started at ${Date(callStartTime)}")
+            callStartTime = System.currentTimeMillis()
+            callAnswerTime = 0L
+            currentCallNumber = phoneNumber
+            currentCallType = "incoming"
 
-            // Send WebSocket for outgoing call
-            webSocketManager.sendCallStarted(currentCallNumber!!, "outgoing")
+            Log.d(TAG, "📲 Incoming call ringing: $phoneNumber")
+            Log.d(TAG, "📲 Prepared for incoming call - waiting for answer")
         }
     }
 
+    // 🎯 NEW: State machine logic for OFFHOOK state
+    private fun handleOffhookState(phoneNumber: String?) {
+        if (wasRinging && !webSocketSent) {
+            // RINGING → OFFHOOK = Incoming call answered
+            callAnswerTime = System.currentTimeMillis()
+            sendCallStartedWebSocket("incoming")
+            Log.d(TAG, "📞 Incoming call answered - WebSocket sent")
+
+        } else if (lastCallState == TelephonyManager.CALL_STATE_IDLE && !webSocketSent) {
+            // IDLE → OFFHOOK = Outgoing call started
+            isCallActive = true
+            callStartTime = System.currentTimeMillis()
+            callAnswerTime = System.currentTimeMillis()
+            currentCallNumber = phoneNumber ?: "Unknown"
+            currentCallType = "outgoing"
+            wasRinging = false
+
+            sendCallStartedWebSocket("outgoing")
+            Log.d(TAG, "📞 Outgoing call started - WebSocket sent")
+        }
+    }
+
+    // 🎯 NEW: Call ended - reset state and process call data
     private fun handleIdleState() {
         if (isCallActive) {
             val callEndTime = System.currentTimeMillis()
             Log.d(TAG, "📴 Call ended at ${Date(callEndTime)}")
 
-            // Wait a bit for call log to update, then process
+            // Process call data after delay (existing logic)
             serviceScope.launch {
-                delay(3000)  // Increased delay to ensure call log is updated
+                delay(3000)
                 processLastCall(callEndTime)
                 resetCallTracking()
             }
+        } else {
+            // Just reset tracking if no active call
+            resetCallTracking()
         }
     }
 
+    // 🎯 NEW: Send WebSocket for call started
+    private fun sendCallStartedWebSocket(callType: String) {
+        if (webSocketSent) {
+            Log.w(TAG, "⚠️ WebSocket already sent for this call")
+            return
+        }
+
+        try {
+            webSocketManager.sendCallStarted("Call In Progress", callType)
+            webSocketSent = true
+            Log.d(TAG, "✅ WebSocket sent: callType=$callType")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send WebSocket", e)
+        }
+    }
+
+    // 🎯 NEW: Reset all call tracking variables
+    private fun resetCallTracking() {
+        Log.d(TAG, "🔄 Resetting call tracking state")
+        isCallActive = false
+        wasRinging = false
+        webSocketSent = false
+        callStartTime = 0
+        callAnswerTime = 0
+        currentCallNumber = null
+        currentCallType = null
+    }
+
+    // 🎯 NEW: Helper method to get readable state names
+    private fun getStateName(state: Int): String {
+        return when (state) {
+            TelephonyManager.CALL_STATE_IDLE -> "IDLE"
+            TelephonyManager.CALL_STATE_RINGING -> "RINGING"
+            TelephonyManager.CALL_STATE_OFFHOOK -> "OFFHOOK"
+            else -> "UNKNOWN($state)"
+        }
+    }
+
+    // 🎯 EXISTING METHOD: Keep processLastCall exactly the same
     private suspend fun processLastCall(callEndTime: Long) {
         try {
             val lastCall = getLastCallFromLog()
@@ -162,7 +243,7 @@ class CallMonitorService : Service() {
                 val finalCallData = lastCall.copy(
                     totalDuration = calculatedTotalDuration,
                     talkDuration = calculatedTalkDuration,
-                    contactName = getContactName(lastCall.phoneNumber)  // Add contact lookup
+                    contactName = getContactName(lastCall.phoneNumber)
                 )
 
                 // Save to database
@@ -176,7 +257,7 @@ class CallMonitorService : Service() {
                 webhookManager.sendWebhook(finalCallData.copy(id = callId))
                 Log.d(TAG, "🔗 Webhook sent for call ID: $callId")
 
-                // Send WebSocket event (NEW FUNCTIONALITY - ADDED)
+                // Send WebSocket event (EXISTING FUNCTIONALITY - PRESERVED)
                 webSocketManager.sendCallEnded(finalCallData.copy(id = callId))
                 Log.d(TAG, "📡 WebSocket event sent for call ID: $callId")
 
@@ -188,6 +269,7 @@ class CallMonitorService : Service() {
         }
     }
 
+    // 🎯 EXISTING METHODS: Keep all these exactly the same
     private suspend fun getLastCallFromLog(): CallData? {
         return withContext(Dispatchers.IO) {
             try {
@@ -237,7 +319,7 @@ class CallMonitorService : Service() {
 
                         return@withContext CallData(
                             phoneNumber = phoneNumber,
-                            contactName = null, // Will be filled by getContactName
+                            contactName = null,
                             callType = callType,
                             talkDuration = duration,
                             totalDuration = duration,
@@ -260,14 +342,12 @@ class CallMonitorService : Service() {
 
     private fun getContactName(phoneNumber: String): String? {
         return try {
-            // Check if we have permission
             if (checkSelfPermission(android.Manifest.permission.READ_CONTACTS)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 Log.w(TAG, "📱 No READ_CONTACTS permission")
                 return null
             }
 
-            // Clean the phone number for better matching
             val cleanNumber = phoneNumber.replace("[^\\d+]".toRegex(), "")
             Log.d(TAG, "📱 Looking up contact for: $phoneNumber (cleaned: $cleanNumber)")
 
@@ -277,7 +357,6 @@ class CallMonitorService : Service() {
                 ContactsContract.CommonDataKinds.Phone.NUMBER
             )
 
-            // Try multiple query variations for better matching
             val queries = listOf(
                 phoneNumber,
                 cleanNumber,
@@ -317,15 +396,7 @@ class CallMonitorService : Service() {
         }
     }
 
-    private fun resetCallTracking() {
-        Log.d(TAG, "🔄 Call tracking reset")
-        isCallActive = false
-        callStartTime = 0
-        callAnswerTime = 0
-        currentCallNumber = null
-        currentCallType = null
-    }
-
+    // 🎯 EXISTING METHODS: Keep all these exactly the same
     private fun startForegroundService() {
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -335,7 +406,7 @@ class CallMonitorService : Service() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Call Analytics Active")
-            .setContentText("Monitoring calls and sending data to server")
+            .setContentText("Monitoring calls with state tracking")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -352,7 +423,7 @@ class CallMonitorService : Service() {
                 "Call Monitor Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Channel for call monitoring service"
+                description = "Channel for call monitoring service with state tracking"
                 setShowBadge(false)
             }
 
