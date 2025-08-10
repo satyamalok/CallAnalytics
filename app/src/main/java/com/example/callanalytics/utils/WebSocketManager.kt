@@ -261,7 +261,8 @@ class WebSocketManager(private val context: Context) {
         }
     }
 
-    fun sendCallEnded(callData: com.example.callanalytics.models.CallData) {
+    // 🎯 ENHANCED: Now includes today's total talk time
+    fun sendCallEnded(callData: com.example.callanalytics.models.CallData, todayTotalTalkTime: Long = 0L) {
         if (!isConnected) {
             Log.w(TAG, "⚠️ Not connected, cannot send call_ended")
             return
@@ -287,11 +288,12 @@ class WebSocketManager(private val context: Context) {
                 put("event", "call_ended")
                 put("agentCode", agentCode)
                 put("callData", callDataJson)
+                put("todayTotalTalkTime", todayTotalTalkTime) // 🎯 NEW: Today's total talk time
                 put("timestamp", System.currentTimeMillis())
             }
 
             socket?.emit("call_ended", data)
-            Log.d(TAG, "📤 Sent call_ended: $agentCode -> ${callData.phoneNumber} (${callData.talkDuration}s)")
+            Log.d(TAG, "📤 Sent call_ended: $agentCode -> ${callData.phoneNumber} (${callData.talkDuration}s, total today: ${todayTotalTalkTime}s)")
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error sending call_ended: ${e.message}")

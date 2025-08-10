@@ -257,15 +257,36 @@ class CallMonitorService : Service() {
                 webhookManager.sendWebhook(finalCallData.copy(id = callId))
                 Log.d(TAG, "🔗 Webhook sent for call ID: $callId")
 
-                // Send WebSocket event (EXISTING FUNCTIONALITY - PRESERVED)
-                webSocketManager.sendCallEnded(finalCallData.copy(id = callId))
-                Log.d(TAG, "📡 WebSocket event sent for call ID: $callId")
+                // 🎯 NEW: Get today's total talk time from local database
+                val todayTotalTalkTime = getTodayTotalTalkTime()
+                Log.d(TAG, "📊 Today's total talk time: ${todayTotalTalkTime}s")
 
+                // Send WebSocket event with today's total talk time
+                webSocketManager.sendCallEnded(finalCallData.copy(id = callId), todayTotalTalkTime)
+                Log.d(TAG, "📡 WebSocket event sent for call ID: $callId with total talk time: ${todayTotalTalkTime}s")
             } else {
                 Log.w(TAG, "⚠️ No call found in call log")
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error processing last call", e)
+        }
+    }
+
+    // 🎯 NEW: Get today's total talk time from local database
+    private suspend fun getTodayTotalTalkTime(): Long {
+        return withContext(Dispatchers.IO) {
+            try {
+                val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                val calls = database.callDao().getCallsForDate(today)
+
+                val totalTalkTime = calls.sumOf { it.talkDuration }
+                Log.d(TAG, "📊 Calculated today's total talk time: ${totalTalkTime}s from ${calls.size} calls")
+
+                return@withContext totalTalkTime
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error calculating today's talk time", e)
+                return@withContext 0L
+            }
         }
     }
 
