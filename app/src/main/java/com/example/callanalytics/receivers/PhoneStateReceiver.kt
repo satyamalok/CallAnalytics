@@ -14,6 +14,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         private const val TAG = "PhoneStateReceiver"
         private var lastProcessedState = ""
         private var lastProcessedTime = 0L
+        private var previousCallState = "" // 🎯 NEW: Track previous state
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -38,14 +39,22 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 TelephonyManager.EXTRA_STATE_RINGING -> {
                     Log.d(TAG, "📲 Incoming call detected")
                     startCallMonitorService(context, "RINGING", phoneNumber)
+                    previousCallState = "RINGING"
                 }
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                     Log.d(TAG, "📞 Call answered/outgoing")
                     startCallMonitorService(context, "OFFHOOK", phoneNumber)
+                    previousCallState = "OFFHOOK"
                 }
                 TelephonyManager.EXTRA_STATE_IDLE -> {
-                    Log.d(TAG, "📴 Call ended")
-                    startCallMonitorService(context, "IDLE", phoneNumber)
+                    // 🎯 OPTIMIZED: Only start service for call processing on IDLE
+                    if (previousCallState == "OFFHOOK" || previousCallState == "RINGING") {
+                        Log.d(TAG, "📴 Call ended - starting processing")
+                        startCallMonitorService(context, "IDLE", phoneNumber)
+                    } else {
+                        Log.d(TAG, "📴 Phone idle (no active call to process)")
+                    }
+                    previousCallState = "IDLE"
                 }
             }
         }

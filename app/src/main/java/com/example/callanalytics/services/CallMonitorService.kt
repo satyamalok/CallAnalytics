@@ -36,6 +36,7 @@ class CallMonitorService : Service() {
     private var wasRinging = false
     private var webSocketSent = false
     private var lastProcessedCallTimestamp = 0L
+    private var lastProcessedCallFingerprint = "" // 🎯 NEW: Duplicate prevention
 
     // 🎯 NEW: Simplified call tracking variables
     private var callStartTime = 0L
@@ -48,6 +49,8 @@ class CallMonitorService : Service() {
         private const val TAG = "CallMonitorService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "CallMonitorChannel"
+        @Volatile
+        private var isProcessingCall = false // 🎯 NEW: Processing lock
     }
 
     override fun onCreate() {
@@ -203,13 +206,25 @@ class CallMonitorService : Service() {
 
     // 🎯 EXISTING METHOD: Keep processLastCall exactly the same
     private suspend fun processLastCall(callEndTime: Long) {
+        // 🎯 NEW: Prevent concurrent processing
+        if (isProcessingCall) {
+            Log.d(TAG, "⚠️ Already processing a call, skipping")
+            return
+        }
+
+        isProcessingCall = true
         try {
             val lastCall = getLastCallFromLog()
             if (lastCall != null) {
 
                 // DUPLICATE PREVENTION: Check if we already processed this call
                 if (lastCall.timestamp <= lastProcessedCallTimestamp) {
-                    Log.d(TAG, "⚠️ Call already processed, skipping duplicate")
+                    Log.d(TAG, "⚠️ Call already processed by timestamp, skipping duplicate")
+                    return
+                }
+
+                // 🎯 NEW: Enhanced duplicate detection with fingerprint
+                if (isDuplicateCall(lastCall)) {
                     return
                 }
 
@@ -269,6 +284,9 @@ class CallMonitorService : Service() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error processing last call", e)
+        } finally {
+            isProcessingCall = false // 🎯 NEW: Always release lock
+            Log.d(TAG, "🔓 Call processing lock released")
         }
     }
 
@@ -416,6 +434,25 @@ class CallMonitorService : Service() {
             null
         }
     }
+
+    // new function
+    // 🎯 NEW: Create unique fingerprint for each call
+    private fun createCallFingerprint(callData: CallData): String {
+        return "${callData.timestamp}_${callData.phoneNumber}_${callData.callType}_${callData.talkDuration}"
+    }
+
+    // 🎯 NEW: Check if call is duplicate
+    private fun isDuplicateCall(callData: CallData): Boolean {
+        val fingerprint = createCallFingerprint(callData)
+        if (fingerprint == lastProcessedCallFingerprint) {
+            Log.d(TAG, "⚠️ Duplicate call detected, skipping: $fingerprint")
+            return true
+        }
+        lastProcessedCallFingerprint = fingerprint
+        Log.d(TAG, "✅ New call fingerprint: $fingerprint")
+        return false
+    }
+
 
     // 🎯 EXISTING METHODS: Keep all these exactly the same
     private fun startForegroundService() {
