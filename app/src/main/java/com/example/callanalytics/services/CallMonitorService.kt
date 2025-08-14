@@ -21,6 +21,8 @@ import com.example.callanalytics.utils.WebhookManager
 import com.example.callanalytics.utils.WebSocketManager
 import java.text.SimpleDateFormat
 import java.util.*
+// ADD this import with other imports
+import com.example.callanalytics.utils.CallReconciliationManager
 
 class CallMonitorService : Service() {
 
@@ -28,6 +30,9 @@ class CallMonitorService : Service() {
     private lateinit var database: AppDatabase
     private lateinit var webhookManager: WebhookManager
     private lateinit var webSocketManager: WebSocketManager
+
+    // ADD this variable with other class variables
+    private lateinit var reconciliationManager: CallReconciliationManager
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
 
@@ -62,6 +67,12 @@ class CallMonitorService : Service() {
 
         createNotificationChannel()
         Log.d(TAG, "🚀 CallMonitorService created with state tracking")
+
+        // ADD this line in onCreate() after other manager initializations
+        reconciliationManager = CallReconciliationManager(this, database, webhookManager, webSocketManager)
+
+// Also add initialization call
+        reconciliationManager.initializeReconciliation()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -83,6 +94,8 @@ class CallMonitorService : Service() {
         if (callState != -1) {
             handleCallStateChange(callState, phoneNumber)
         }
+
+
 
         return START_STICKY
     }
@@ -287,6 +300,23 @@ class CallMonitorService : Service() {
         } finally {
             isProcessingCall = false // 🎯 NEW: Always release lock
             Log.d(TAG, "🔓 Call processing lock released")
+        }
+
+        // ADD this at the END of processLastCall method, just before the "finally" block
+
+// Trigger reconciliation after processing call
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "🔄 Triggering post-call reconciliation")
+                val agentCode = sharedPreferences.getString("agentCode", "") ?: ""
+                val agentName = sharedPreferences.getString("agentName", "") ?: ""
+
+                if (agentCode.isNotEmpty()) {
+                    reconciliationManager.performReconciliation(agentCode, agentName)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error in post-call reconciliation: ${e.message}")
+            }
         }
     }
 

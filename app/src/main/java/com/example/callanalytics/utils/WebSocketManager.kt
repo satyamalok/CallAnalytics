@@ -15,6 +15,9 @@ import org.json.JSONObject
 import com.example.callanalytics.services.OverlayService
 import java.net.URISyntaxException
 
+// ADD this import at the top with other imports
+import com.example.callanalytics.models.CallData
+
 class WebSocketManager(private val context: Context) {
 
     private var socket: Socket? = null
@@ -329,4 +332,81 @@ class WebSocketManager(private val context: Context) {
             else -> "Disconnected"
         }
     }
+
+    // REPLACE the existing sendCallUpdate method with this:
+    suspend fun sendCallUpdate(callData: CallData) {
+        if (!isConnected) {
+            Log.w(TAG, "⚠️ Not connected, cannot send call_update")
+            return
+        }
+
+        try {
+            val callUpdateData = JSONObject().apply {
+                put("action", "call_update")
+                put("agentCode", callData.agentCode)
+                put("agentName", callData.agentName)
+                put("phoneNumber", callData.phoneNumber)
+                put("contactName", callData.contactName ?: JSONObject.NULL)
+                put("callType", callData.callType)
+                put("talkDuration", callData.talkDuration)
+                put("totalDuration", callData.totalDuration)
+                put("callDate", callData.callDate)
+                put("startTime", callData.startTime)
+                put("endTime", callData.endTime)
+                put("timestamp", callData.timestamp)
+                put("dataSource", callData.dataSource)
+            }
+
+            socket?.emit("call_update", callUpdateData)
+            Log.d(TAG, "📤 Sent call update via WebSocket: ${callData.agentCode} -> ${callData.phoneNumber}")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending call update: ${e.message}")
+        }
+    }
+
+    // REPLACE the existing sendTalkTimeUpdate method with this:
+    suspend fun sendTalkTimeUpdate(agentCode: String, agentName: String, talkTime: Int) {
+        if (!isConnected) {
+            Log.w(TAG, "⚠️ Not connected, cannot send talktime_update")
+            return
+        }
+
+        try {
+            val talkTimeData = JSONObject().apply {
+                put("action", "talktime_update")
+                put("agentCode", agentCode)
+                put("agentName", agentName)
+                put("talkTime", talkTime)
+                put("timestamp", System.currentTimeMillis())
+            }
+
+            socket?.emit("talktime_update", talkTimeData)
+            Log.d(TAG, "📤 Sent talk time update via WebSocket: $agentCode -> ${talkTime}s")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending talk time update: ${e.message}")
+        }
+    }
+
+    // ADD this helper method to your WebSocketManager class (optional approach)
+    private fun sendMessage(data: Map<String, Any>) {
+        if (!isConnected) {
+            Log.w(TAG, "⚠️ Not connected, cannot send message")
+            return
+        }
+
+        try {
+            val jsonData = JSONObject()
+            for ((key, value) in data) {
+                jsonData.put(key, value ?: JSONObject.NULL)
+            }
+
+            val action = data["action"] as? String ?: "unknown"
+            socket?.emit(action, jsonData)
+            Log.d(TAG, "📤 Sent message via WebSocket: $action")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending message: ${e.message}")
+        }
+    }
+
+
 }

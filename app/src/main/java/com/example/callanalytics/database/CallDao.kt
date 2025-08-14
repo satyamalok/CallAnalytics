@@ -16,6 +16,8 @@ interface CallDao {
     @Query("SELECT * FROM calls WHERE callDate = :date")
     suspend fun getAnalyticsForDate(date: String): List<CallData>
 
+
+
     @Insert
     suspend fun insertCall(call: CallData): Long
 
@@ -36,4 +38,15 @@ interface CallDao {
 
     @Query("DELETE FROM failed_webhooks")
     suspend fun clearFailedWebhooks()
+
+    // REPLACE the previous methods with these corrected ones
+
+    @Query("SELECT * FROM calls WHERE timestamp BETWEEN :startTime AND :endTime")
+    suspend fun getCallsByTimestampRange(startTime: Long, endTime: Long): List<CallData>
+
+    @Query("SELECT COALESCE(SUM(talkDuration), 0) FROM calls WHERE agentCode = :agentCode AND callDate = :date")
+    suspend fun getTodaysTalkTime(agentCode: String, date: String): Long
+
+    @Query("SELECT * FROM calls WHERE agentCode = :agentCode AND callDate = :date ORDER BY timestamp DESC")
+    suspend fun getCallsByAgentAndDate(agentCode: String, date: String): List<CallData>
 }

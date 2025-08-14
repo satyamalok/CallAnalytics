@@ -21,7 +21,8 @@ data class CallData(
     val agentName: String,
     val webhookSent: Boolean = false,
     val retryCount: Int = 0,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val dataSource: String = "real_time" // ADD THIS LINE
 ) {
     fun toWebhookJson(): String {
         val startTimeISO = formatTimestampISO(timestamp)

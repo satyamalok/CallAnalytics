@@ -9,7 +9,7 @@ import com.example.callanalytics.models.FailedWebhook
 
 @Database(
     entities = [CallData::class, FailedWebhook::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,7 +25,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "call_analytics_database"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration() // ADD this line
+                .build()
                 INSTANCE = instance
                 instance
             }
